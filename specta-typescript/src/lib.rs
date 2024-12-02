@@ -140,19 +140,36 @@ fn export_datatype_inner(ctx: ExportContext, typ: &NamedDataType, type_map: &Typ
     );
     let name = sanitise_type_name(ctx.clone(), NamedLocation::Type, name)?;
 
-    let generics = item
-        .generics()
-        .filter(|generics| !generics.is_empty())
-        .map(|generics| format!("<{}>", generics.join(", ")))
-        .unwrap_or_default();
-
     let mut inline_ts = String::new();
+    let mut generic_hash_keys = vec![];
     datatype_inner(
         ctx.clone(),
         &FunctionResultVariant::Value((typ.inner).clone()),
         type_map,
         &mut inline_ts,
+        &mut generic_hash_keys,
     )?;
+
+    let generics = item
+        .generics()
+        .filter(|generics| !generics.is_empty())
+        .map(|generics| {
+            format!(
+                "<{}>",
+                generics
+                    .iter()
+                    .map(|ty| {
+                        if generic_hash_keys.contains(ty) {
+                            format!("{} extends string | number | symbol", ty.to_string())
+                        } else {
+                            ty.to_string()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+        .unwrap_or_default();
 
     Ok(inner_comments(
         ctx,
@@ -179,6 +196,7 @@ pub fn datatype(conf: &Typescript, typ: &FunctionResultVariant, type_map: &TypeM
         typ,
         type_map,
         &mut s,
+        &mut vec![],
     )
     .map(|_| s)
 }
@@ -194,6 +212,7 @@ pub(crate) fn datatype_inner(
     typ: &FunctionResultVariant,
     type_map: &TypeMap,
     s: &mut String,
+    generic_hash_keys: &mut Vec<specta::datatype::GenericType>,
 ) -> Result<()> {
     let typ = match typ {
         FunctionResultVariant::Value(t) => t,
@@ -206,6 +225,7 @@ pub(crate) fn datatype_inner(
                         &FunctionResultVariant::Value(t.clone()),
                         type_map,
                         &mut v,
+                        generic_hash_keys,
                     )?;
                     v
                 },
@@ -216,6 +236,7 @@ pub(crate) fn datatype_inner(
                         &FunctionResultVariant::Value(e.clone()),
                         type_map,
                         &mut v,
+                        generic_hash_keys,
                     )?;
                     v
                 },
@@ -271,6 +292,7 @@ pub(crate) fn datatype_inner(
                 &FunctionResultVariant::Value((**def).clone()),
                 type_map,
                 s,
+                generic_hash_keys,
             )?;
 
             let or_null = format!(" | {NULL}");
@@ -281,11 +303,17 @@ pub(crate) fn datatype_inner(
         DataType::Map(def) => {
             // We use this instead of `Record<K, V>` to avoid issues with circular references.
             s.push_str("{ [key in ");
+
+            if let DataType::Generic(ty) = def.key_ty() {
+                generic_hash_keys.push(ty.clone());
+            }
+
             datatype_inner(
                 ctx.clone(),
                 &FunctionResultVariant::Value(def.key_ty().clone()),
                 type_map,
                 s,
+                generic_hash_keys,
             )?;
             s.push_str("]: ");
             datatype_inner(
@@ -293,6 +321,7 @@ pub(crate) fn datatype_inner(
                 &FunctionResultVariant::Value(def.value_ty().clone()),
                 type_map,
                 s,
+                generic_hash_keys,
             )?;
             s.push_str(" }");
         }
@@ -304,6 +333,7 @@ pub(crate) fn datatype_inner(
                 &FunctionResultVariant::Value(def.ty().clone()),
                 type_map,
                 &mut dt,
+                generic_hash_keys,
             )?;
 
             let dt = if (dt.contains(' ') && !dt.ends_with('}'))
@@ -344,6 +374,7 @@ pub(crate) fn datatype_inner(
             item,
             type_map,
             s,
+            generic_hash_keys,
         )?,
         DataType::Enum(item) => {
             let mut ctx = ctx.clone();
@@ -357,9 +388,12 @@ pub(crate) fn datatype_inner(
                 item,
                 type_map,
                 s,
+                generic_hash_keys,
             )?
         }
-        DataType::Tuple(tuple) => s.push_str(&tuple_datatype(ctx, tuple, type_map)?),
+        DataType::Tuple(tuple) => {
+            s.push_str(&tuple_datatype(ctx, tuple, type_map, generic_hash_keys)?)
+        }
         DataType::Reference(reference) => match &reference.generics()[..] {
             [] => s.push_str(&reference.name()),
             generics => {
@@ -376,6 +410,7 @@ pub(crate) fn datatype_inner(
                         &FunctionResultVariant::Value(v.clone()),
                         type_map,
                         s,
+                        generic_hash_keys,
                     )?;
                 }
 
@@ -401,6 +436,7 @@ fn unnamed_fields_datatype(
                 &FunctionResultVariant::Value((*ty).clone()),
                 type_map,
                 &mut v,
+                &mut vec![],
             )?;
             s.push_str(&inner_comments(
                 ctx,
@@ -424,6 +460,7 @@ fn unnamed_fields_datatype(
                     &FunctionResultVariant::Value((*ty).clone()),
                     type_map,
                     &mut v,
+                    &mut vec![],
                 )?;
                 s.push_str(&inner_comments(
                     ctx.clone(),
@@ -439,7 +476,12 @@ fn unnamed_fields_datatype(
     })
 }
 
-fn tuple_datatype(ctx: ExportContext, tuple: &TupleType, type_map: &TypeMap) -> Output {
+fn tuple_datatype(
+    ctx: ExportContext,
+    tuple: &TupleType,
+    type_map: &TypeMap,
+    generic_hash_keys: &mut Vec<specta::datatype::GenericType>,
+) -> Output {
     match &tuple.elements()[..] {
         [] => Ok(NULL.to_string()),
         tys => Ok(format!(
@@ -452,6 +494,7 @@ fn tuple_datatype(ctx: ExportContext, tuple: &TupleType, type_map: &TypeMap) -> 
                         &FunctionResultVariant::Value(v.clone()),
                         type_map,
                         &mut s,
+                        generic_hash_keys,
                     )
                     .map(|_| s)
                 })
@@ -467,6 +510,7 @@ fn struct_datatype(
     strct: &StructType,
     type_map: &TypeMap,
     s: &mut String,
+    generic_hash_keys: &mut Vec<specta::datatype::GenericType>,
 ) -> Result<()> {
     Ok(match &strct.fields() {
         StructFields::Unit => s.push_str(NULL),
@@ -498,6 +542,7 @@ fn struct_datatype(
                         &FunctionResultVariant::Value(ty.clone()),
                         type_map,
                         &mut s,
+                        generic_hash_keys,
                     )
                     .map(|_| {
                         inner_comments(
@@ -523,6 +568,7 @@ fn struct_datatype(
                         field_ref,
                         type_map,
                         &mut other,
+                        generic_hash_keys,
                     )?;
 
                     Ok(inner_comments(
@@ -553,6 +599,7 @@ fn enum_variant_datatype(
     type_map: &TypeMap,
     name: Cow<'static, str>,
     variant: &EnumVariant,
+    generic_hash_keys: &mut Vec<specta::datatype::GenericType>,
 ) -> Result<Option<String>> {
     match &variant.inner() {
         // TODO: Remove unreachable in type system
@@ -577,6 +624,7 @@ fn enum_variant_datatype(
                             field_ref,
                             type_map,
                             &mut other,
+                            generic_hash_keys,
                         )?;
 
                         Ok(inner_comments(
@@ -604,6 +652,7 @@ fn enum_variant_datatype(
                         &FunctionResultVariant::Value(ty.clone()),
                         type_map,
                         &mut s,
+                        generic_hash_keys,
                     )
                     .map(|_| s)
                 })
@@ -632,6 +681,7 @@ fn enum_datatype(
     e: &EnumType,
     type_map: &TypeMap,
     s: &mut String,
+    generic_hash_keys: &mut Vec<specta::datatype::GenericType>,
 ) -> Result<()> {
     if e.variants().is_empty() {
         return Ok(write!(s, "{NEVER}")?);
@@ -655,6 +705,7 @@ fn enum_datatype(
                                 type_map,
                                 name.clone(),
                                 variant,
+                                generic_hash_keys,
                             )?
                             .expect("Invalid Serde type"),
                             true,
@@ -722,6 +773,7 @@ fn enum_datatype(
                                         field,
                                         type_map,
                                         &mut other,
+                                        generic_hash_keys,
                                     )?;
                                     fields.push(other);
                                 }
@@ -735,6 +787,7 @@ fn enum_datatype(
                                     type_map,
                                     variant_name.clone(),
                                     variant,
+                                    generic_hash_keys,
                                 )?;
                                 let sanitised_name = sanitise_key(variant_name.clone(), false);
 
@@ -754,6 +807,7 @@ fn enum_datatype(
                                     type_map,
                                     variant_name.clone(),
                                     variant,
+                                    generic_hash_keys,
                                 )?;
 
                                 let mut s = String::new();
@@ -806,6 +860,7 @@ fn object_field_to_ts(
     (field, ty): NonSkipField,
     type_map: &TypeMap,
     s: &mut String,
+    generic_hash_keys: &mut Vec<specta::datatype::GenericType>,
 ) -> Result<()> {
     let field_name_safe = sanitise_key(key, false);
 
@@ -821,6 +876,7 @@ fn object_field_to_ts(
         &FunctionResultVariant::Value(ty.clone()),
         type_map,
         &mut value,
+        generic_hash_keys,
     )?;
 
     Ok(write!(s, "{key}: {value}",)?)
@@ -895,7 +951,7 @@ fn validate_type_for_tagged_intersection(
             StructFields::Unit => Ok(true),
             StructFields::Unnamed(_) => {
                 Err(ExportError::InvalidTaggedVariantContainingTupleStruct(
-                   ctx.export_path()
+                    ctx.export_path()
                 ))
             }
             StructFields::Named(fields) => {
@@ -913,7 +969,7 @@ fn validate_type_for_tagged_intersection(
                     Ok(v.variants().iter().any(|(_, v)| match &v.inner() {
                         // `{ .. } & null` is `never`
                         EnumVariants::Unit => true,
-                         // `{ ... } & Record<string, never>` is not useful
+                        // `{ ... } & Record<string, never>` is not useful
                         EnumVariants::Named(v) => v.tag().is_none() && v.fields().is_empty(),
                         EnumVariants::Unnamed(_) => false,
                     }))

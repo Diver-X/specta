@@ -41,6 +41,7 @@ fn typedef_named_datatype_inner(
         &FunctionResultVariant::Value(typ.inner.clone()),
         type_map,
         &mut inline_ts,
+        &mut vec![],
     )?;
 
     let mut builder = super::comments::js_doc_builder(CommentFormatterArgs { docs, deprecated });

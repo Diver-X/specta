@@ -166,6 +166,7 @@ fn is_valid_map_key(key_ty: &DataType, type_map: &TypeMap) -> Result<(), SerdeEr
 
             is_valid_map_key(&resolve_generics(ty.inner.clone(), r.generics()), type_map)
         }
+        DataType::Generic(_) => Ok(()),
         _ => Err(SerdeError::InvalidMapKey),
     }
 }
