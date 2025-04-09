@@ -7,7 +7,7 @@
 
 use std::{borrow::Cow, path::Path};
 
-use specta::{Language, TypeMap};
+use specta::{Language, TypeCollection};
 use specta_typescript::{BigIntExportBehavior, CommentFormatterFn, FormatterFn};
 
 // TODO: Ensure this is up to our `Typescript` exporters standards.
@@ -33,13 +33,6 @@ impl JSDoc {
     /// This is perfect for configuring lint ignore rules or other file-level comments.
     pub fn header(mut self, header: impl Into<Cow<'static, str>>) -> Self {
         self.0.header = header.into();
-        self
-    }
-
-    // TODO: Only keep this is TS stays responsible for exporting which it probs won't.
-    /// Removes the default Specta header from the output.
-    pub fn remove_default_header(mut self) -> Self {
-        self.0.remove_default_header = true;
         self
     }
 
@@ -79,7 +72,7 @@ impl Language for JSDoc {
     type Error = specta_typescript::ExportError; // TODO: Custom error type
 
     // TODO: Make this properly export JSDoc
-    fn export(&self, type_map: TypeMap) -> Result<String, Self::Error> {
+    fn export(&self, _type_map: &TypeCollection) -> Result<String, Self::Error> {
         todo!("Coming soon...");
         // let mut out = self.0.header.to_string();
         // if !self.0.remove_default_header {
